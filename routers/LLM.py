@@ -63,13 +63,11 @@ def get_llm():
 
         if not useAzureOpenAI:
             org_id = os.environ.get("OPENAI_ORG_ID")
-            if isinstance(org_id, str) == False or org_id == "":
-                raise Exception(
-                    "OPENAI_ORG_ID environment variable must be set when USE_AZURE_OPENAI is set to False"
-                )
+            model_name = os.environ.get("OPENAI_GPT_MODEL_NAME", "gpt-3.5-turbo")
+            print(f"Using direct OpenAI with model: {model_name}")
             # Add the OpenAI text completion service to the kernel
             kernel.add_chat_service(
-                "dv", OpenAIChatCompletion("gpt-3.5-turbo", api_key, org_id)
+                "dv", OpenAIChatCompletion(model_name, api_key, org_id)
             )
 
         else:

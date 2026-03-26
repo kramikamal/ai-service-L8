@@ -18,10 +18,14 @@ async def get_health():
     # Initialize the array with "description"
     capabilities = ["description"]
 
-    # Check if the environment variable is set
-    if (os.environ.get("AZURE_OPENAI_DALLE_ENDPOINT") or os.environ.get("AZURE_OPENAI_ENDPOINT")) and os.environ.get("AZURE_OPENAI_DALLE_DEPLOYMENT_NAME"):
-        # If it is, add "image" to the array
-        capabilities.append("image")
+    # Check if image generation is available (Azure OpenAI or direct OpenAI)
+    use_azure = os.environ.get("USE_AZURE_OPENAI", "False").lower() == "true"
+    if use_azure:
+        if (os.environ.get("AZURE_OPENAI_DALLE_ENDPOINT") or os.environ.get("AZURE_OPENAI_ENDPOINT")) and os.environ.get("AZURE_OPENAI_DALLE_DEPLOYMENT_NAME"):
+            capabilities.append("image")
+    else:
+        if os.environ.get("OPENAI_DALLE_API_KEY"):
+            capabilities.append("image")
 
     print("Generative AI capabilities: ", ", ".join(capabilities))
     return JSONResponse(content={"status": 'ok', "version": app.version, "capabilities": capabilities}, status_code=status.HTTP_200_OK)
