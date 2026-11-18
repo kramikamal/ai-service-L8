@@ -1,8 +1,8 @@
-from fastapi import FastAPI, status
+from fastapi import FastAPI
 from routers.description_generator import description
 from routers.image_generator import image
+from routers.LLM import configured, enabled
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 import os
 
 app = FastAPI(version=os.environ.get("APP_VERSION", "0.1.0"))
@@ -15,17 +15,9 @@ async def get_health():
     """
     Returns status code 200
     """
-    # Initialize the array with "description"
-    capabilities = ["description"]
-
-    # Check if image generation is available (Azure OpenAI or direct OpenAI)
-    use_azure = os.environ.get("USE_AZURE_OPENAI", "False").lower() == "true"
-    if use_azure:
-        if (os.environ.get("AZURE_OPENAI_DALLE_ENDPOINT") or os.environ.get("AZURE_OPENAI_ENDPOINT")) and os.environ.get("AZURE_OPENAI_DALLE_DEPLOYMENT_NAME"):
-            capabilities.append("image")
-    else:
-        if os.environ.get("OPENAI_DALLE_API_KEY"):
-            capabilities.append("image")
-
-    print("Generative AI capabilities: ", ", ".join(capabilities))
-    return JSONResponse(content={"status": 'ok', "version": app.version, "capabilities": capabilities}, status_code=status.HTTP_200_OK)
+    capabilities = []
+    if enabled("USE_LOCAL_LLM") or configured():
+        capabilities.append("description")
+    if configured(image=True):
+        capabilities.append("image")
+    return {"status": "ok", "version": app.version, "capabilities": capabilities}

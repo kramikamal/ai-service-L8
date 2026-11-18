@@ -1,98 +1,79 @@
-from azure.identity import DefaultAzureCredential
-import semantic_kernel as sk
-from semantic_kernel.connectors.ai.open_ai import (
-    AzureChatCompletion,
-    OpenAIChatCompletion,
-)
-from dotenv import load_dotenv
+"""Configuration and requests shared by the two OpenAI-backed routes."""
+
 import os
 
+import requests
+from dotenv import load_dotenv
+from fastapi import HTTPException
 
-def get_llm():
-    """Function to initialize the LLM so that it can be used in the app"""
-    # Set the useLocalLLM and useAzureOpenAI variables based on environment variables
-    useLocalLLM: bool = False
-    useAzureOpenAI: bool = False
-    kernel = False
-    endpoint: str = ""
+load_dotenv()
 
-    if os.environ.get("USE_LOCAL_LLM"):
-        useLocalLLM = os.environ.get("USE_LOCAL_LLM").lower() == "true"
 
-    if os.environ.get("USE_AZURE_OPENAI"):
-        useAzureOpenAI = os.environ.get("USE_AZURE_OPENAI").lower() == "true"
+def enabled(name):
+    return os.getenv(name, "").lower() == "true"
 
-    # if useLocalLLM and useAzureOpenAI are both set to true, raise an exception
-    if useLocalLLM and useAzureOpenAI:
-        raise Exception(
-            "USE_LOCAL_LLM and USE_AZURE_OPENAI environment variables cannot both be set to true"
-        )
 
-    # if useLocalLLM or useAzureOpenAI are set to true, get the endpoint from the environment variables
-    if useLocalLLM or useAzureOpenAI:
-        endpoint = os.environ.get("AI_ENDPOINT") or os.environ.get(
-            "AZURE_OPENAI_GPT_ENDPOINT"
-        )
+def model_settings(image=False):
+    if enabled("USE_AZURE_OPENAI"):
+        prefix = "AZURE_OPENAI_DALLE" if image else "AZURE_OPENAI_GPT"
+        endpoint = os.getenv(f"{prefix}_ENDPOINT") or os.getenv("AZURE_OPENAI_ENDPOINT", "")
+        base = endpoint.rstrip("/")
+        if base and not base.endswith("/openai/v1"):
+            base += "/openai/v1"
+        return base, os.getenv(f"{prefix}_DEPLOYMENT_NAME")
 
-        if isinstance(endpoint, str) == False or endpoint == "":
-            raise Exception(
-                "AI_ENDPOINT or AZURE_OPENAI_ENDPOINT environment variable must be set when USE_LOCAL_LLM or USE_AZURE_OPENAI is set to true"
-            )
-
-    # if not using local LLM, set up the semantic kernel
-    if useLocalLLM:
-        print("Using Local LLM")
+    if image:
+        model = os.getenv("OPENAI_IMAGE_MODEL") or os.getenv("OPENAI_DALLE_MODEL_NAME", "gpt-image-2.6-flare")
     else:
-        print("Using OpenAI and setting up Semantic Kernel")
-        # Load environment variables from .env file
-        load_dotenv()
+        model = os.getenv("OPENAI_GPT_MODEL_NAME", "gpt-4o-mini")
+    return os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/"), model
 
-        # Initialize the semantic kernel
-        kernel: sk.Kernel = sk.Kernel()
 
-        kernel = sk.Kernel()
+def configured(image=False):
+    base, model = model_settings(image)
+    key = os.getenv("OPENAI_DALLE_API_KEY" if image else "OPENAI_GPT_API_KEY")
+    identity = enabled("USE_AZURE_OPENAI") and enabled("USE_AZURE_AD")
+    return bool(base and model and (key or identity))
 
-        # Get the Azure OpenAI deployment name, API key, and endpoint or OpenAI org id from environment variables
-        api_key: str = os.environ.get("OPENAI_GPT_API_KEY")
-        useAzureAD: str = os.environ.get("USE_AZURE_AD")
 
-        if (isinstance(api_key, str) == False or api_key == "") and (
-            isinstance(useAzureAD, str) == False or useAzureAD == ""
-        ):
-            raise Exception("OPENAI_API_KEY environment variable must be set")
+def post_json(url, payload, headers=None):
+    try:
+        response = requests.post(url, json=payload, headers=headers, timeout=(5, 150))
+    except requests.Timeout as exc:
+        raise HTTPException(504, "The AI provider timed out.") from exc
+    except requests.RequestException as exc:
+        raise HTTPException(502, "Could not connect to the AI provider.") from exc
 
-        if not useAzureOpenAI:
-            org_id = os.environ.get("OPENAI_ORG_ID")
-            model_name = os.environ.get("OPENAI_GPT_MODEL_NAME", "gpt-3.5-turbo")
-            print(f"Using direct OpenAI with model: {model_name}")
-            # Add the OpenAI text completion service to the kernel
-            kernel.add_chat_service(
-                "dv", OpenAIChatCompletion(model_name, api_key, org_id)
-            )
+    if not response.ok:
+        messages = {
+            400: "The AI provider rejected the request. Check the inputs and model settings.",
+            401: "The AI provider rejected the credential.",
+            403: "The credential does not have access to this model.",
+            404: "The configured AI model or deployment was not found.",
+            429: "The AI provider rate limit or quota was reached.",
+        }
+        raise HTTPException(response.status_code, messages.get(response.status_code, "The AI provider failed the request."))
+    try:
+        return response.json()
+    except ValueError as exc:
+        raise HTTPException(502, "The AI provider returned invalid JSON.") from exc
 
-        else:
-            deployment: str = os.environ.get("AZURE_OPENAI_GPT_DEPLOYMENT_NAME")
-            # Add the Azure OpenAI text completion service to the kernel
-            if isinstance(useAzureAD, str) == True and useAzureAD.lower() == "true":
-                print("Authenticating to Azure OpenAI with Azure AD Workload Identity")
-                credential = DefaultAzureCredential()
-                access_token = credential.get_token(
-                    "https://cognitiveservices.azure.com/.default"
-                )
-                kernel.add_chat_service(
-                    "dv",
-                    AzureChatCompletion(
-                        deployment_name=deployment,
-                        endpoint=endpoint,
-                        ad_token=access_token.token,
-                    ),
-                )
-            else:
-                print("Authenticating to Azure OpenAI with OpenAI API key")
-                kernel.add_chat_service(
-                    "dv",
-                    AzureChatCompletion(
-                        deployment_name=deployment, endpoint=endpoint, api_key=api_key
-                    ),
-                )
-    return kernel, useLocalLLM, endpoint
+
+def generate(path, payload, *, image=False):
+    if not configured(image):
+        raise HTTPException(503, "Configure the AI endpoint, model, and credential for this feature.")
+    base, model = model_settings(image)
+    key = os.getenv("OPENAI_DALLE_API_KEY" if image else "OPENAI_GPT_API_KEY")
+    if enabled("USE_AZURE_OPENAI") and enabled("USE_AZURE_AD"):
+        from azure.identity import DefaultAzureCredential
+
+        with DefaultAzureCredential() as credential:
+            token = credential.get_token("https://cognitiveservices.azure.com/.default").token
+        headers = {"Authorization": f"Bearer {token}"}
+    elif enabled("USE_AZURE_OPENAI"):
+        headers = {"api-key": key}
+    else:
+        headers = {"Authorization": f"Bearer {key}"}
+        if os.getenv("OPENAI_ORG_ID"):
+            headers["OpenAI-Organization"] = os.environ["OPENAI_ORG_ID"]
+    return post_json(f"{base}/{path}", {"model": model, **payload}, headers)

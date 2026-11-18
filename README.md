@@ -1,48 +1,32 @@
-# ai-service
+# AI service
 
-This is a FastAPI app that provides an API for interacting with OpenAI models using [Semantic Kernel SDK](https://github.com/microsoft/semantic-kernel). It is meant to be used in conjunction with the store-admin app.
+Store Admin calls this FastAPI service through the product service. It generates descriptions with Chat Completions and product photos with the Images API. A generated photo is returned as a compact JPEG data URL so the product and its image fit in the catalog's 256 KiB request limit.
 
-## Running the app locally
+## Run locally
 
-The app does not rely on any other services other than OpenAI or Azure OpenAI endpoints, so you can run it locally without any other services running.
-
-### Prerequisites
-
-- [Python3](https://www.python.org/downloads/)
-- [pip](https://pip.pypa.io/en/stable/installation/)
-- [OpenAI API Key](https://beta.openai.com/docs/developer-quickstart/your-api-keys)
-- [Azure OpenAI API Key](https://azure.microsoft.com/products/cognitive-services/openai-service/)
-
-### Running the app
-
-To run the app, clone the repo, open a terminal, and navigate to the `ai-service` directory. Then run the following commands:
+Run these commands from the repository root using Python 3.12.
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+cp routers/.env.example .env
+```
 
-export USE_AZURE_OPENAI=True # set to False if you are not using Azure OpenAI
-export USE_AZURE_AD=True # set to True if you are using Azure OpenAI with Azure AD authentication
-export AZURE_OPENAI_API_VERSION=2024-02-15-preview # set to the version of the Azure OpenAI API you are using https://learn.microsoft.com/azure/ai-services/openai/reference#rest-api-versioning
-export AZURE_OPENAI_GPT_DEPLOYMENT_NAME= # required if using Azure OpenAI
-export AZURE_OPENAI_GPT_ENDPOINT= # required if using Azure OpenAI
-export AZURE_OPENAI_DALLE_ENDPOINT= # required if using Azure OpenAI's DALL-E model
-export AZURE_OPENAI_DALLE_DEPLOYMENT_NAME= # required if using Azure OpenAI's DALL-E model
-export OPENAI_GPT_API_KEY= # always required if using OpenAI if using Azure OpenAI, consider use Workload Identity https://learn.microsoft.com/azure/aks/open-ai-secure-access-quickstart
-export OPENAI_DALLE_API_KEY= # always required if using OpenAI if using Azure OpenAI, consider use Workload Identity https://learn.microsoft.com/azure/aks/open-ai-secure-access-quickstart
-export OPENAI_ORG_ID= # required if using OpenAI
+Edit the private `.env` file for your provider, then start the service.
 
+```bash
 uvicorn main:app --host 127.0.0.1 --port 5001
 ```
 
-When the app is running, you should see output similar to the following:
+| Setting | Direct OpenAI | Azure OpenAI |
+| --- | --- | --- |
+| `USE_AZURE_OPENAI` | `False` | `True` |
+| Text model | `OPENAI_GPT_MODEL_NAME` | `AZURE_OPENAI_GPT_DEPLOYMENT_NAME` |
+| Image model | `OPENAI_IMAGE_MODEL` | `AZURE_OPENAI_DALLE_DEPLOYMENT_NAME` |
+| Endpoint | Defaults to `https://api.openai.com/v1`. Override with `OPENAI_BASE_URL` for a compatible gateway. | Set `AZURE_OPENAI_GPT_ENDPOINT` and `AZURE_OPENAI_DALLE_ENDPOINT` to the respective resource endpoints. |
+| Credentials | `OPENAI_GPT_API_KEY` and `OPENAI_DALLE_API_KEY` | Use the resource keys in those same fields, or set `USE_AZURE_AD=True` with an authorized Azure identity. |
 
-```text
-INFO:     Started server process [134031]
-INFO:     Waiting for application startup.
-INFO:     Application startup complete.
-INFO:     Uvicorn running on http://127.0.0.1:5001 (Press CTRL+C to quit)
-```
+The lab manifest selects the models for the Brightspace path. The existing image credential and Azure deployment field names are also used for GPT Image models. The service accepts the older direct model variable `OPENAI_DALLE_MODEL_NAME` if `OPENAI_IMAGE_MODEL` is unset.
 
-Using the [`test-ai-service.http`](./test-ai-service.http) file in the root of the repo, you can test the API. However, you will need to use VS Code and have the [REST Client](https://marketplace.visualstudio.com/items?itemName=humao.rest-client) extension installed.
+Use `GET /health` to see which features are configured. Exercise the two generation routes with the [sample requests](./test-ai-service.http). A generation request checks model access. Run the image-response regression tests locally with `python -m unittest test_image_generator`.
